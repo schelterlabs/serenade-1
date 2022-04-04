@@ -1,0 +1,1 @@
+RUSTFLAGS="-C target-cpu=native" cargo run --release --bin snapcase > serenade_deletion.txt

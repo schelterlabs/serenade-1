@@ -8,10 +8,13 @@ edition = "2018"
 name = "serving"
 path = "src/bin/serving.rs"
 
+[[bin]]
+name = "snapcase"
+path = "src/bin/snapcase_experiment.rs"
 
 [dependencies]
 csv = "1.1"
-rand = "0.8"
+rand = "0.6"
 itertools = "0.10"
 actix-web = "3.3"
 rocksdb = {version = "0.16", default-features = false}

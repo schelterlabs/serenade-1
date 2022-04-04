@@ -35,6 +35,58 @@ pub struct VMISIndex {
 }
 
 impl VMISIndex {
+
+    pub fn new_from_train_data(
+        data_train: (Vec<Vec<u64>>, Vec<Vec<usize>>, Vec<u32>, TrainingDataStats),
+        m_most_recent_sessions: usize,
+        idf_weighting: f64
+    ) -> Self {
+        //let start_time = Instant::now();
+        //println!(
+        //    "reading training data, determine items per training session {}",
+        //    &path_to_training
+        //);
+        //let data_train = read_from_file(path_to_training);
+        let (
+            historical_sessions_train,
+            _historical_sessions_id_train,
+            historical_sessions_max_time_stamp,
+            training_data_stats,
+        ) = data_train;
+        //println!(
+        //    "reading training data, determine items per training session:{} micros",
+        //    start_time.elapsed().as_micros()
+        //);
+
+        //let start_time = Instant::now();
+        //println!("prepare indexes");
+        let (
+            item_to_top_sessions_ordered,
+            item_to_idf_score,
+            _session_to_items_sorted,
+            item_to_product_attributes,
+        ) = prepare_hashmap(
+            &historical_sessions_train,
+            &historical_sessions_max_time_stamp,
+            m_most_recent_sessions,
+            training_data_stats.qty_events_p99_5 as usize,
+            idf_weighting,
+        );
+        //println!(
+        //    "prepare indexes:{} micros",
+        //    start_time.elapsed().as_micros()
+        //);
+
+        VMISIndex {
+            item_to_top_sessions_ordered,
+            session_to_max_time_stamp: historical_sessions_max_time_stamp,
+            item_to_idf_score,
+            session_to_items_sorted: historical_sessions_train,
+            training_data_stats,
+            item_to_product_attributes,
+        }
+    }
+
     pub fn new_from_csv(path_to_training: &str, m_most_recent_sessions: usize, idf_weighting: f64) -> Self {
         let start_time = Instant::now();
         println!(
@@ -587,6 +639,174 @@ fn binary_search_left(array: &[u64], key: u64) -> Result<usize, usize> {
     }
 }
 
+pub fn read_into_vecs(path: &str) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+    // Creates a new csv `Reader` from a file
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b'\t')
+        .has_headers(true)
+        .from_path(path).unwrap();
+
+    // Vector initialization
+    let mut session_id: Vec<usize> = Vec::with_capacity(100_000_000);
+    let mut item_id: Vec<usize> = Vec::with_capacity(100_000_000);
+    let mut time: Vec<usize> = Vec::with_capacity(100_000_000);
+
+    reader.deserialize().for_each(|result| {
+        if result.is_ok() {
+            let raw: (usize, usize, f64) = result.unwrap();
+            let (a_session_id, a_item_id, a_time): (usize, usize, usize) =
+                (raw.0, raw.1, raw.2.round() as usize);
+
+            session_id.push(a_session_id);
+            item_id.push(a_item_id);
+            time.push(a_time);
+        } else {
+            eprintln!("Unable to parse input!");
+        }
+    });
+
+    (session_id, item_id, time)
+}
+
+pub fn vecs_to_training_data(
+    mut session_id: Vec<usize>,
+    mut item_id: Vec<usize>,
+    time: Vec<usize>,
+) -> Result<(Vec<Vec<u64>>, Vec<Vec<usize>>, Vec<u32>, TrainingDataStats), Box<dyn Error>> {
+    // Sort by session id - the data is unsorted
+    let mut session_id_indices: Vec<usize> = (0..session_id.len()).into_iter().collect();
+    session_id_indices.sort_by_key(|&i| &session_id[i]);
+    let session_id_sorted: Vec<usize> = session_id_indices
+        .iter()
+        .map(|&i| session_id[i])
+        .collect();
+    let item_id_sorted: Vec<usize> = session_id_indices
+        .iter()
+        .map(|&i| item_id[i])
+        .collect();
+    let time_sorted: Vec<usize> = session_id_indices
+        .iter()
+        .map(|&i| time[i])
+        .collect();
+
+    // Get unique session ids
+    session_id.sort_unstable();
+    session_id.dedup();
+
+    let qty_records = time_sorted.len();
+    let qty_unique_session_ids = session_id.len();
+
+    // Get unique item ids
+    // let mut unique_item_ids = item_id.clone();
+    item_id.sort_unstable();
+    item_id.dedup();
+    let qty_unique_item_ids = item_id.len();
+
+    let min_time = time.par_iter().min().unwrap();
+    let min_time_date_time = NaiveDateTime::from_timestamp(*min_time as i64, 0);
+    let max_time = time.par_iter().max().unwrap();
+    let max_time_date_time = NaiveDateTime::from_timestamp(*max_time as i64, 0);
+
+    // Create historical sessions array (deduplicated), historical sessions id array and array with max timestamps.
+    //let mut i: usize = 0;
+    let mut historical_sessions: Vec<Vec<u64>> = Vec::with_capacity(session_id.len());
+    let mut historical_sessions_id: Vec<Vec<usize>> = Vec::with_capacity(session_id.len());
+    let mut historical_sessions_max_time_stamp: Vec<u32> =
+        Vec::with_capacity(session_id.len());
+    let mut history_session: Vec<u64> = Vec::with_capacity(1000);
+    let mut history_session_id: Vec<usize> = Vec::with_capacity(1000);
+    let mut max_time_stamp: usize = time_sorted[0];
+    // Push initial session and item id
+    history_session.push(item_id_sorted[0] as u64);
+    history_session_id.push(item_id_sorted[0]);
+    // Loop over length of data
+    for i in 1..session_id_sorted.len() {
+        if session_id_sorted[i] == session_id_sorted[i - 1] {
+            if !history_session.contains(&(item_id_sorted[i] as u64)) {
+                history_session.push(item_id_sorted[i] as u64);
+                history_session_id.push(session_id_sorted[i]);
+                if time_sorted[i] > max_time_stamp {
+                    max_time_stamp = time_sorted[i];
+                }
+            }
+        } else {
+            let mut history_session_sorted = history_session.clone();
+            history_session_sorted.sort_unstable();
+            historical_sessions.push(history_session_sorted);
+            historical_sessions_id.push(history_session_id.clone());
+            historical_sessions_max_time_stamp.push(max_time_stamp as u32);
+            history_session.clear();
+            history_session_id.clear();
+            history_session.push(item_id_sorted[i] as u64);
+            history_session_id.push(session_id_sorted[i]);
+            max_time_stamp = time_sorted[i];
+        }
+    }
+
+    let qty_events = historical_sessions
+        .iter()
+        .map(|items| items.len() as f64)
+        .collect_vec();
+    let qty_events_digest = TDigest::new_with_size(100);
+    let qty_events_digest = qty_events_digest.merge_unsorted(qty_events);
+
+    //println!("Using hardcoded session duration percentiles.");
+    let session_duration_p05 = 14_u64;
+    let session_duration_p25 = 77_u64;
+    let session_duration_p50 = 248_u64;
+    let session_duration_p75 = 681_u64;
+    let session_duration_p90 = 1316_u64;
+    let session_duration_p95 = 1862_u64;
+    let session_duration_p99 = 3359_u64;
+    let session_duration_p99_5 = 4087_u64;
+    let session_duration_p100 = 539931_u64;
+
+    // Session qty event percentiles:  p5=2 p25=2 p50=3 p75=6 p90=10 p95=14 p99=27 p99.5=34 p100=9408
+    let qty_events_p05 = qty_events_digest.estimate_quantile(0.05).round() as u64;
+    let qty_events_p25 = qty_events_digest.estimate_quantile(0.25).round() as u64;
+    let qty_events_p50 = qty_events_digest.estimate_quantile(0.50).round() as u64;
+    let qty_events_p75 = qty_events_digest.estimate_quantile(0.75).round() as u64;
+    let qty_events_p90 = qty_events_digest.estimate_quantile(0.90).round() as u64;
+    let qty_events_p95 = qty_events_digest.estimate_quantile(0.95).round() as u64;
+    let qty_events_p99 = qty_events_digest.estimate_quantile(0.99).round() as u64;
+    let qty_events_p99_5 = qty_events_digest.estimate_quantile(0.995).round() as u64;
+    let qty_events_p100 = qty_events_digest.estimate_quantile(1.0).round() as u64;
+
+    let training_data_stats = TrainingDataStats {
+        descriptive_name: "nothing".to_string(),
+        qty_records,
+        qty_unique_session_ids,
+        qty_unique_item_ids,
+        min_time_date_time,
+        max_time_date_time,
+        session_duration_p05,
+        session_duration_p25,
+        session_duration_p50,
+        session_duration_p75,
+        session_duration_p90,
+        session_duration_p95,
+        session_duration_p99,
+        session_duration_p99_5,
+        session_duration_p100,
+        qty_events_p05,
+        qty_events_p25,
+        qty_events_p50,
+        qty_events_p75,
+        qty_events_p90,
+        qty_events_p95,
+        qty_events_p99,
+        qty_events_p99_5,
+        qty_events_p100,
+    };
+
+    //println!("qty_events_p99_5: {}", qty_events_p99_5);
+    Ok((
+        historical_sessions,
+        historical_sessions_id,
+        historical_sessions_max_time_stamp,
+        training_data_stats,
+    ))
+}
 
 pub fn read_from_file(
     path: &str,
@@ -693,7 +913,7 @@ pub fn read_from_file(
     let qty_events_digest = TDigest::new_with_size(100);
     let qty_events_digest = qty_events_digest.merge_unsorted(qty_events);
 
-    println!("Using hardcoded session duration percentiles.");
+    //println!("Using hardcoded session duration percentiles.");
     let session_duration_p05 = 14_u64;
     let session_duration_p25 = 77_u64;
     let session_duration_p50 = 248_u64;
@@ -742,7 +962,7 @@ pub fn read_from_file(
         qty_events_p100,
     };
 
-    println!("qty_events_p99_5: {}", qty_events_p99_5);
+    //println!("qty_events_p99_5: {}", qty_events_p99_5);
     Ok((
         historical_sessions,
         historical_sessions_id,
