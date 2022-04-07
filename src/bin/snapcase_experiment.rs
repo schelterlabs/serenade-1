@@ -10,7 +10,7 @@ use rand::prelude::*;
 
 fn main() {
 
-    let num_clicks_to_delete = 7;
+    let num_clicks_to_delete = 20;
 
     for seed in [42, 789, 1234] {
         for num_active_queries in [100, 1000, 10000] {
