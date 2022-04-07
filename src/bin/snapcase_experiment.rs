@@ -12,30 +12,30 @@ fn main() {
 
     let num_clicks_to_delete = 7;
 
-    for seed in [1234] {
+    for seed in [42, 789, 1234] {
         for num_active_queries in [100, 1000, 10000] {
-            // run_experiment(
-            //     "ecom1m",
-            //     "/Users/ssc/projects/snapcase/datasets/session/bolcom-clicks-1m_train.txt",
-            //     "/Users/ssc/projects/snapcase/datasets/session/bolcom-clicks-1m_test.txt",
-            //     num_active_queries,
-            //     num_clicks_to_delete,
-            //     seed,
-            // );
+            run_experiment(
+                "ecom1m",
+                "../snapcase/datasets/session/bolcom-clicks-1m_train.txt",
+                "../snapcase/datasets/session/bolcom-clicks-1m_test.txt",
+                num_active_queries,
+                num_clicks_to_delete,
+                seed,
+            );
 
-            // run_experiment(
-            //     "rsc15",
-            //     "/Users/ssc/projects/snapcase/datasets/session/rsc15-clicks_train_full.txt",
-            //     "/Users/ssc/projects/snapcase/datasets/session/rsc15-clicks_test.txt",
-            //     num_active_queries,
-            //     num_clicks_to_delete,
-            //     seed,
-            // );
+            run_experiment(
+                "rsc15",
+                "../snapcase/datasets/session/rsc15-clicks_train_full.txt",
+                "../snapcase/datasets/session/rsc15-clicks_test.txt",
+                num_active_queries,
+                num_clicks_to_delete,
+                seed,
+            );
 
             run_experiment(
                 "ecom60m",
-                "/Users/ssc/projects/snapcase/datasets/session/bolcom-clicks-50m_train.txt",
-                "/Users/ssc/projects/snapcase/datasets/session/bolcom-clicks-50m_test.txt",
+                "..snapcase/datasets/session/bolcom-clicks-50m_train.txt",
+                "../snapcase/datasets/session/bolcom-clicks-50m_test.txt",
                 num_active_queries,
                 num_clicks_to_delete,
                 seed,
