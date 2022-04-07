@@ -34,7 +34,7 @@ fn main() {
 
             run_experiment(
                 "ecom60m",
-                "..snapcase/datasets/session/bolcom-clicks-50m_train.txt",
+                "../snapcase/datasets/session/bolcom-clicks-50m_train.txt",
                 "../snapcase/datasets/session/bolcom-clicks-50m_test.txt",
                 num_active_queries,
                 num_clicks_to_delete,
